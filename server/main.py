@@ -38,8 +38,9 @@ def _decode(data: bytes) -> np.ndarray | None:
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
+    """상태 확인. UptimeRobot 등 모니터링 도구는 HEAD로 요청하므로 둘 다 허용."""
     return {"status": "ok"}
 
 

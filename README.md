@@ -13,9 +13,11 @@
 ## 서버
 
 **프로덕션 (앱 기본값, PC 불필요)**: `https://billiard-coach.onrender.com`
-- Render 클라우드, GitHub `yoana78/billiard-coach` master 푸시 시 자동 재배포
+- Render 클라우드, 코드는 GitHub `yoana78/billiard-coach`
 - Free 플랜: 15분 유휴 시 슬립 → 첫 요청에 30초~1분 콜드스타트
-- 서버 코드 수정 후 반영: `git add -A && git commit -m "..." && git push`
+  (앱이 시작할 때 미리 깨우는 요청을 보내 체감을 줄임)
+- 서버 코드 반영: `git push` 후 **Render 대시보드에서 Manual Deploy 클릭**
+  (공개 repo 연결이라 푸시 자동배포가 없음)
 
 **로컬 개발** (앱 인트로 톱니바퀴에서 PC LAN IP로 변경):
 ```powershell
