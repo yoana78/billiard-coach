@@ -105,7 +105,11 @@ class GuideShot {
   final String thicknessLabel;
   final double aimOffset;              // 겨냥 가로 오프셋 (공 지름 단위, +오른쪽)
   final String tip;
-  final double tipDeltaDeg;            // 당점 보정각 (+위/-아래, 0=중단)
+  final double tipDeltaDeg;            // 당점 상하 보정각 (+위/-아래)
+  final int tipX;                      // 당점 가로 단계 (-3 좌 ~ +3 우)
+  final int tipY;                      // 당점 세로 단계 (-3 하 ~ +3 상)
+  final int power;                     // 강도 1(매우약)~5(매우강)
+  final String powerLabel;
   final String kiss;                   // 없음/거의없음/보통/높음/매우높음
   final int kissLevel;                 // 1(없음)~5(매우높음)
   final int difficulty;                // 1(매우쉬움)~5(매우어려움)
@@ -126,6 +130,10 @@ class GuideShot {
     this.aimOffset = 0,
     required this.tip,
     this.tipDeltaDeg = 0,
+    this.tipX = 0,
+    this.tipY = 0,
+    this.power = 3,
+    this.powerLabel = '보통',
     required this.kiss,
     this.kissLevel = 1,
     this.difficulty = 3,
@@ -153,6 +161,10 @@ class GuideShot {
         aimOffset: ((j['aim_offset'] ?? 0) as num).toDouble(),
         tip: (j['tip'] ?? '') as String,
         tipDeltaDeg: ((j['tip_delta_deg'] ?? 0) as num).toDouble(),
+        tipX: (j['tip_x'] ?? 0) as int,
+        tipY: (j['tip_y'] ?? 0) as int,
+        power: (j['power'] ?? 3) as int,
+        powerLabel: (j['power_label'] ?? '보통') as String,
         kiss: (j['kiss'] ?? '없음') as String,
         kissLevel: (j['kiss_level'] ?? 1) as int,
         difficulty: (j['difficulty'] ?? 3) as int,
@@ -166,7 +178,8 @@ class ApiClient {
 
   ApiClient(this.baseUrl, {http.Client? client}) : _client = client ?? http.Client();
 
-  Future<List<GuideShot>> guides(List<BallInfo> balls, String cue) async {
+  Future<List<GuideShot>> guides(List<BallInfo> balls, String cue,
+      {String game = 'four', String table = 'medium'}) async {
     final res = await _client
         .post(
           Uri.parse('$baseUrl/guides'),
@@ -177,9 +190,12 @@ class ApiClient {
                 {'color': b.color, 'x_mm': b.xMm, 'y_mm': b.yMm}
             ],
             'cue': cue,
+            'game': game,
+            'table': table,
           }),
         )
-        .timeout(const Duration(seconds: 10));
+        // 클라우드 무료 플랜은 유휴 후 첫 요청에 콜드스타트(수십 초)가 있음
+        .timeout(const Duration(seconds: 75));
     final data = jsonDecode(res.body) as Map<String, dynamic>;
     if (data['ok'] != true) {
       throw Exception((data['reason'] ?? '가이드 계산 실패') as String);
@@ -197,11 +213,23 @@ class ApiClient {
     return AnalyzeResult.fromJson(jsonDecode(body) as Map<String, dynamic>);
   }
 
-  Future<TopViewResult> topview(Uint8List imageBytes) async {
-    final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/topview'))
+  Future<TopViewResult> topview(Uint8List imageBytes,
+      {String table = 'medium'}) async {
+    final req = http.MultipartRequest(
+        'POST', Uri.parse('$baseUrl/topview?table=$table'))
       ..files.add(http.MultipartFile.fromBytes('file', imageBytes, filename: 'photo.jpg'));
-    final res = await _client.send(req).timeout(const Duration(seconds: 20));
+    // 콜드스타트 + 이미지 분석 시간 여유
+    final res = await _client.send(req).timeout(const Duration(seconds: 120));
     final body = await res.stream.bytesToString();
     return TopViewResult.fromJson(jsonDecode(body) as Map<String, dynamic>);
+  }
+
+  /// 서버 깨우기 (클라우드 콜드스타트 선제 해소). 실패해도 무시.
+  Future<void> warmUp() async {
+    try {
+      await _client
+          .get(Uri.parse('$baseUrl/health'))
+          .timeout(const Duration(seconds: 90));
+    } catch (_) {}
   }
 }

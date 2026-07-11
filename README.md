@@ -10,26 +10,22 @@
 | `server/` | Python FastAPI — 다이아몬드 검출 + 호모그래피 탑뷰 변환 |
 | `app/` | Flutter Android 앱 |
 
-## 서버 실행 (외부 접속 포함)
+## 서버
 
-**간단 실행**: `C:\coding\billiard\start_server.bat` 더블클릭 → 창 2개가 열림
-(서버 + Cloudflare 터널). 터널 창에 표시되는 `https://xxxx.trycloudflare.com`
-주소를 앱 인트로 톱니바퀴에 입력하면 어디서든(당구장 포함) 접속 가능.
+**프로덕션 (앱 기본값, PC 불필요)**: `https://billiard-coach.onrender.com`
+- Render 클라우드, GitHub `yoana78/billiard-coach` master 푸시 시 자동 재배포
+- Free 플랜: 15분 유휴 시 슬립 → 첫 요청에 30초~1분 콜드스타트
+- 서버 코드 수정 후 반영: `git add -A && git commit -m "..." && git push`
 
-주의사항:
-- **PC가 켜져 있고 두 창이 떠 있는 동안만** 앱이 동작함
-- 터널 주소는 재시작할 때마다 바뀜 → 그때마다 앱에서 주소 갱신 필요
-- 고정 주소가 필요하면 `server/Dockerfile`로 Render/Railway/Fly.io 등에
-  배포 (호스팅 계정 필요)
-
-수동 실행:
+**로컬 개발** (앱 인트로 톱니바퀴에서 PC LAN IP로 변경):
 ```powershell
 cd C:\coding\billiard\server
 $env:PYTHONIOENCODING='utf-8'
+$env:SAVE_UPLOADS='1'   # 업로드 사진 저장 (디버깅용, 로컬에서만)
 .venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
-# 별도 창에서:
-& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' tunnel --url http://localhost:8000
 ```
+
+임시 외부 공개가 필요하면 `start_server.bat` (Cloudflare 터널, URL 유동적).
 
 ## 서버 테스트 / CLI
 

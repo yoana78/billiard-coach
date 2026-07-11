@@ -5,33 +5,50 @@ import 'package:flutter/material.dart';
 import '../config.dart';
 import '../services/api.dart';
 
-/// 당구대 규격 (mm) — server/detection/spec.py 와 동기화 유지.
-const double kTableWMm = 2540.0; // 장쿠션 방향 (화면 세로로 표시)
-const double kTableHMm = 1270.0; // 단쿠션 방향 (화면 가로로 표시)
-const double kBallRadiusMm = 32.75;
+/// 표시 공통 상수 (mm)
 const double kDiamondOffsetMm = 95.0; // 쿠션 날 → 다이아몬드 중심
-const double kDiamondSpacingMm = 317.5;
 const double kCushionOverhangMm = 40.0;
 const double kRailMm = 150.0; // 표시용 레일 폭 (다이아몬드 포함)
 
-// 세로(portrait) 캔버스 mm 크기
-const double kPortraitWMm = kTableHMm + 2 * kRailMm;
-const double kPortraitHMm = kTableWMm + 2 * kRailMm;
+/// 테이블 규격 (server/shots/guide.py TABLES 와 동기화 유지).
+class UiTableSpec {
+  final double w;      // 장쿠션 방향 (화면 세로로 표시)
+  final double h;      // 단쿠션 방향 (화면 가로로 표시)
+  final double ballR;
+  const UiTableSpec(this.w, this.h, this.ballR);
 
-/// 월드 좌표(mm, 가로 기준) → 세로 캔버스 좌표(mm).
-/// 90도 회전(반사 아님)이라 가이드 경로의 좌우가 뒤집히지 않는다.
-Offset worldToPortraitMm(double xMm, double yMm) {
-  return Offset(kRailMm + yMm, kRailMm + (kTableWMm - xMm));
+  double get spacing => w / 8; // 다이아몬드 간격
+  double get portraitW => h + 2 * kRailMm;
+  double get portraitH => w + 2 * kRailMm;
+
+  /// 월드 좌표(mm, 가로 기준) → 세로 캔버스 좌표(mm).
+  /// 90도 회전(반사 아님)이라 가이드 경로의 좌우가 뒤집히지 않는다.
+  Offset worldToPortraitMm(double xMm, double yMm) {
+    return Offset(kRailMm + yMm, kRailMm + (w - xMm));
+  }
 }
+
+const Map<String, UiTableSpec> kUiTables = {
+  'medium': UiTableSpec(2540.0, 1270.0, 32.75), // 중대
+  'large': UiTableSpec(2844.0, 1422.0, 30.75),  // 대대
+};
 
 /// 탑뷰 + 샷 가이드 화면 (기획서 [메인]의 초기 형태).
 /// 촬영 사진이 아니라 규격 모델 당구대를 세로로 렌더링하고,
 /// 검출된 공 위치와 샷 가이드를 그 위에 그린다.
 class ResultScreen extends StatefulWidget {
   final TopViewResult result;
+  final String table; // 'medium' | 'large'
+  final String game;  // 'four' | 'three'
   final ApiClient? api; // 테스트 주입용. null 이면 설정된 서버 주소 사용.
 
-  const ResultScreen({super.key, required this.result, this.api});
+  const ResultScreen({
+    super.key,
+    required this.result,
+    this.table = 'medium',
+    this.game = 'four',
+    this.api,
+  });
 
   @override
   State<ResultScreen> createState() => _ResultScreenState();
@@ -59,6 +76,8 @@ class _ResultScreenState extends State<ResultScreen>
       widget.result.balls.any((b) => b.color == 'white') &&
       widget.result.balls.any((b) => b.color == 'yellow');
 
+  UiTableSpec get _spec => kUiTables[widget.table] ?? kUiTables['medium']!;
+
   @override
   void initState() {
     super.initState();
@@ -82,7 +101,8 @@ class _ResultScreenState extends State<ResultScreen>
     });
     try {
       final api = widget.api ?? ApiClient(await AppConfig.serverUrl());
-      final guides = await api.guides(widget.result.balls, _cue);
+      final guides = await api.guides(widget.result.balls, _cue,
+          game: widget.game, table: widget.table);
       if (!mounted) return;
       _all = guides;
       _loading = false;
@@ -259,7 +279,7 @@ class _ResultScreenState extends State<ResultScreen>
                     maxScale: 5,
                     child: Center(
                       child: AspectRatio(
-                        aspectRatio: kPortraitWMm / kPortraitHMm,
+                        aspectRatio: _spec.portraitW / _spec.portraitH,
                         child: TweenAnimationBuilder<double>(
                           key: ValueKey('rot-$_cue-${_selected?.id}'),
                           tween: Tween(begin: _angleFrom, end: _angleTarget),
@@ -276,6 +296,7 @@ class _ResultScreenState extends State<ResultScreen>
                                 animCueMm: animCue,
                                 animObjMm: animObj,
                                 viewAngle: angle,
+                                spec: _spec,
                               ),
                             );
                           },
@@ -370,6 +391,7 @@ class _ResultScreenState extends State<ResultScreen>
                   cueColor: _cue,
                   balls: widget.result.balls,
                   clothColor: widget.result.clothColor,
+                  spec: _spec,
                 ),
               ),
             ),
@@ -405,6 +427,7 @@ class _GuideCard extends StatelessWidget {
   final String cueColor;
   final List<BallInfo> balls;
   final String clothColor;
+  final UiTableSpec spec;
 
   const _GuideCard({
     required this.guide,
@@ -412,6 +435,7 @@ class _GuideCard extends StatelessWidget {
     required this.cueColor,
     required this.balls,
     required this.clothColor,
+    this.spec = const UiTableSpec(2540.0, 1270.0, 32.75),
   });
 
   @override
@@ -470,7 +494,7 @@ class _GuideCard extends StatelessWidget {
       children: [
         // 미니 경로 미리보기 (세로 당구대 축소판)
         AspectRatio(
-          aspectRatio: kPortraitWMm / kPortraitHMm,
+          aspectRatio: spec.portraitW / spec.portraitH,
           child: CustomPaint(
             painter: TablePainter(
               balls: balls,
@@ -478,6 +502,7 @@ class _GuideCard extends StatelessWidget {
               guide: guide,
               cueColor: cueColor,
               mini: true,
+              spec: spec,
             ),
           ),
         ),
@@ -499,8 +524,10 @@ class _GuideCard extends StatelessWidget {
               gradeGauge('난이도', guide.difficulty),
               const SizedBox(height: 3),
               gradeGauge('키스', guide.kissLevel),
+              const SizedBox(height: 3),
+              gradeGauge('강도', guide.power),
               const SizedBox(height: 4),
-              Text('${guide.thicknessLabel} · ${guide.tip}',
+              Text('${guide.thicknessLabel} · 당점 ${guide.tip}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -518,7 +545,8 @@ class _GuideCard extends StatelessWidget {
               height: 40,
               child: CustomPaint(
                 painter: TipPainter(
-                  tipDeltaDeg: guide.tipDeltaDeg,
+                  tipX: guide.tipX,
+                  tipY: guide.tipY,
                   ballColor: cueBallColor,
                 ),
               ),
@@ -563,11 +591,13 @@ class _GuideCard extends StatelessWidget {
 }
 
 /// 당점 스나이퍼: 수구 단면 위에 쳐야 할 지점을 조준선으로 표시.
+/// 가로/세로 각각 -3~+3 단계 (평균적인 회전력 기준 상대 표기).
 class TipPainter extends CustomPainter {
-  final double tipDeltaDeg; // +위(밀어치기) / -아래(끌어치기) / 0 중단
+  final int tipX; // -3(좌) ~ +3(우)
+  final int tipY; // -3(하) ~ +3(상)
   final Color ballColor;
 
-  TipPainter({required this.tipDeltaDeg, required this.ballColor});
+  TipPainter({required this.tipX, required this.tipY, required this.ballColor});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -583,32 +613,41 @@ class TipPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.5);
 
-    // 조준 십자선 (연한 회색)
+    // 조준 십자선 + 단계 눈금 원 (1/3, 2/3)
     final cross = Paint()
       ..color = Colors.black26
       ..strokeWidth = 1;
     canvas.drawLine(c - Offset(r, 0), c + Offset(r, 0), cross);
     canvas.drawLine(c - Offset(0, r), c + Offset(0, r), cross);
+    for (final f in [0.27, 0.54]) {
+      canvas.drawCircle(
+          c, r * f,
+          Paint()
+            ..color = Colors.black12
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 0.8);
+    }
 
-    // 당점 (보정각 ±40° → 공 반지름의 ±0.7 위치로 스케일)
-    final dy = -(tipDeltaDeg / 40.0) * r * 0.7;
-    final target = c + Offset(0, dy);
+    // 당점: 단계(-3~+3) → 반지름의 최대 0.8 위치
+    final dx = (tipX / 3.0) * r * 0.8;
+    final dy = -(tipY / 3.0) * r * 0.8;
+    final target = c + Offset(dx, dy);
     final red = Paint()
       ..color = Colors.redAccent
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
-    canvas.drawCircle(target, r * 0.28, red);
-    canvas.drawCircle(target, r * 0.09, Paint()..color = Colors.redAccent);
+    canvas.drawCircle(target, r * 0.24, red);
+    canvas.drawCircle(target, r * 0.08, Paint()..color = Colors.redAccent);
     // 스나이퍼 눈금 (타깃 원 밖 십자)
-    for (final d in [Offset(r * 0.42, 0), Offset(-r * 0.42, 0),
-                     Offset(0, r * 0.42), Offset(0, -r * 0.42)]) {
+    for (final d in [Offset(r * 0.36, 0), Offset(-r * 0.36, 0),
+                     Offset(0, r * 0.36), Offset(0, -r * 0.36)]) {
       canvas.drawLine(target + d * 0.65, target + d, red);
     }
   }
 
   @override
   bool shouldRepaint(TipPainter old) =>
-      old.tipDeltaDeg != tipDeltaDeg || old.ballColor != ballColor;
+      old.tipX != tipX || old.tipY != tipY || old.ballColor != ballColor;
 }
 
 /// 두께(타점) 다이어그램: 1적구를 정면에서 봤을 때 수구를 얼마나
@@ -676,6 +715,7 @@ class TablePainter extends CustomPainter {
   final Offset? animCueMm; // 플레이 애니메이션 중 수구 위치 (mm)
   final Offset? animObjMm; // 플레이 애니메이션 중 1적구 위치 (mm)
   final double viewAngle;  // 시점 회전 (라디안, 치는 방향이 위로 가도록)
+  final UiTableSpec spec;  // 테이블 규격 (중대/대대)
 
   TablePainter({
     required this.balls,
@@ -686,12 +726,13 @@ class TablePainter extends CustomPainter {
     this.animCueMm,
     this.animObjMm,
     this.viewAngle = 0,
+    this.spec = const UiTableSpec(2540.0, 1270.0, 32.75),
   });
 
-  double _scale(Size size) => size.width / kPortraitWMm;
+  double _scale(Size size) => size.width / spec.portraitW;
 
   Offset _map(double xMm, double yMm, Size size) {
-    final p = worldToPortraitMm(xMm, yMm);
+    final p = spec.worldToPortraitMm(xMm, yMm);
     final s = _scale(size);
     return Offset(p.dx * s, p.dy * s);
   }
@@ -729,13 +770,13 @@ class TablePainter extends CustomPainter {
     final clothDark = clothColor == 'green'
         ? const Color(0xFF14602F)
         : const Color(0xFF104E92);
-    final ovTl = _map(kTableWMm + kCushionOverhangMm, -kCushionOverhangMm, size);
-    final ovBr = _map(-kCushionOverhangMm, kTableHMm + kCushionOverhangMm, size);
+    final ovTl = _map(spec.w + kCushionOverhangMm, -kCushionOverhangMm, size);
+    final ovBr = _map(-kCushionOverhangMm, spec.h + kCushionOverhangMm, size);
     canvas.drawRect(Rect.fromPoints(ovTl, ovBr), Paint()..color = clothDark);
 
     // 경기면
-    final pfTl = _map(kTableWMm, 0, size);
-    final pfBr = _map(0, kTableHMm, size);
+    final pfTl = _map(spec.w, 0, size);
+    final pfBr = _map(0, spec.h, size);
     final pfRect = Rect.fromPoints(pfTl, pfBr);
     canvas.drawRect(pfRect, Paint()..color = cloth);
 
@@ -743,18 +784,18 @@ class TablePainter extends CustomPainter {
     if (!mini) {
       final diamondPaint = Paint()..color = Colors.white;
       for (int i = 0; i <= 8; i++) {
-        final x = i * kDiamondSpacingMm;
+        final x = i * spec.spacing;
         canvas.drawCircle(
             _map(x, -kDiamondOffsetMm, size), 7 * s, diamondPaint);
         canvas.drawCircle(
-            _map(x, kTableHMm + kDiamondOffsetMm, size), 7 * s, diamondPaint);
+            _map(x, spec.h + kDiamondOffsetMm, size), 7 * s, diamondPaint);
       }
       for (int j = 0; j <= 4; j++) {
-        final y = j * kDiamondSpacingMm;
+        final y = j * spec.spacing;
         canvas.drawCircle(
             _map(-kDiamondOffsetMm, y, size), 7 * s, diamondPaint);
         canvas.drawCircle(
-            _map(kTableWMm + kDiamondOffsetMm, y, size), 7 * s, diamondPaint);
+            _map(spec.w + kDiamondOffsetMm, y, size), 7 * s, diamondPaint);
       }
     }
 
@@ -789,7 +830,7 @@ class TablePainter extends CustomPainter {
         yMm = animObjMm!.dy;
       }
       final c = _map(xMm, yMm, size);
-      final r = kBallRadiusMm * s;
+      final r = spec.ballR * s;
       final color = switch (b.color) {
         'white' => Colors.white,
         'yellow' => const Color(0xFFF9C825),
@@ -825,7 +866,7 @@ class TablePainter extends CustomPainter {
     if (g.ghost != null) {
       canvas.drawCircle(
         _map(g.ghost![0], g.ghost![1], size),
-        kBallRadiusMm * s,
+        spec.ballR * s,
         Paint()
           ..color = Colors.white70
           ..strokeWidth = 6 * s
@@ -863,5 +904,6 @@ class TablePainter extends CustomPainter {
       old.animCueMm != animCueMm ||
       old.animObjMm != animObjMm ||
       old.viewAngle != viewAngle ||
+      old.spec != spec ||
       old.balls != balls;
 }

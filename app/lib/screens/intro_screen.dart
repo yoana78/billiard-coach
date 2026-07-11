@@ -6,9 +6,10 @@ import 'capture_screen.dart';
 import 'result_screen.dart';
 
 /// 당구장 없이 가이드 화면을 확인하는 데모용 샘플 배치.
-TopViewResult demoTopViewResult() => TopViewResult(
+/// 3구는 빨강 1개(흰/노/빨), 4구는 빨강 2개.
+TopViewResult demoTopViewResult({String game = 'four'}) => TopViewResult(
       ok: true,
-      diamondCount: 20,
+      diamondCount: 28,
       diamondErrMm: 0.5,
       refined: true,
       clothColor: 'blue',
@@ -16,7 +17,8 @@ TopViewResult demoTopViewResult() => TopViewResult(
         BallInfo(color: 'white', xMm: 500, yMm: 300, score: 1),
         BallInfo(color: 'yellow', xMm: 2200, yMm: 1000, score: 1),
         BallInfo(color: 'red', xMm: 1500, yMm: 635, score: 1),
-        BallInfo(color: 'red', xMm: 1500, yMm: 1100, score: 1),
+        if (game != 'three')
+          BallInfo(color: 'red', xMm: 1500, yMm: 1100, score: 1),
       ],
     );
 
@@ -68,9 +70,15 @@ class IntroScreen extends StatefulWidget {
 }
 
 class _IntroScreenState extends State<IntroScreen> {
-  // MVP: 중대 + 4구 고정, 나머지는 잠금
-  final String _table = '중대';
-  final String _game = '4구';
+  String _table = 'medium'; // 'medium'(중대) | 'large'(대대)
+  String _game = 'four';    // 'four'(4구) | 'three'(3구)
+
+  @override
+  void initState() {
+    super.initState();
+    // 클라우드 서버 콜드스타트 선제 해소 (앱 켜자마자 깨워둠)
+    AppConfig.serverUrl().then((url) => ApiClient(url).warmUp());
+  }
 
   Future<void> _editServerUrl() async {
     final current = await AppConfig.serverUrl();
@@ -99,7 +107,8 @@ class _IntroScreenState extends State<IntroScreen> {
     }
   }
 
-  Widget _choiceRow(String label, List<(String, bool)> options, String selected) {
+  Widget _choiceRow(String label, List<(String, String)> options,
+      String selected, void Function(String) onPick) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -107,21 +116,12 @@ class _IntroScreenState extends State<IntroScreen> {
         const SizedBox(height: 8),
         Row(
           children: [
-            for (final (name, locked) in options) ...[
+            for (final (value, name) in options) ...[
               Expanded(
                 child: ChoiceChip(
-                  label: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(name),
-                      if (locked) ...[
-                        const SizedBox(width: 4),
-                        const Icon(Icons.lock, size: 14),
-                      ],
-                    ],
-                  ),
-                  selected: name == selected,
-                  onSelected: locked ? null : (_) {},
+                  label: Center(child: Text(name)),
+                  selected: value == selected,
+                  onSelected: (_) => setState(() => onPick(value)),
                 ),
               ),
               const SizedBox(width: 8),
@@ -165,9 +165,11 @@ class _IntroScreenState extends State<IntroScreen> {
               ),
             ),
             const SizedBox(height: 48),
-            _choiceRow('당구대', [('중대', false), ('대대', true)], _table),
+            _choiceRow('당구대', [('medium', '중대'), ('large', '대대')],
+                _table, (v) => _table = v),
             const SizedBox(height: 24),
-            _choiceRow('게임', [('4구', false), ('3구', true)], _game),
+            _choiceRow('게임', [('four', '4구'), ('three', '3구')],
+                _game, (v) => _game = v),
             const SizedBox(height: 48),
             FilledButton(
               style: FilledButton.styleFrom(
@@ -178,7 +180,9 @@ class _IntroScreenState extends State<IntroScreen> {
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const CaptureScreen()),
+                  MaterialPageRoute(
+                      builder: (_) =>
+                          CaptureScreen(table: _table, game: _game)),
                 );
               },
               child: const Text('입장', style: TextStyle(fontSize: 18)),
@@ -196,7 +200,11 @@ class _IntroScreenState extends State<IntroScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => ResultScreen(result: demoTopViewResult()),
+                    builder: (_) => ResultScreen(
+                      result: demoTopViewResult(game: _game),
+                      table: _table,
+                      game: _game,
+                    ),
                   ),
                 );
               },

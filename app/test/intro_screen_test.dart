@@ -18,20 +18,29 @@ void main() {
     expect(find.text('3구'), findsOneWidget);
     expect(find.text('입장'), findsOneWidget);
     expect(find.text('데모 보기 (샘플 배치)'), findsOneWidget);
-    // 잠금 아이콘 2개 (대대, 3구)
-    expect(find.byIcon(Icons.lock), findsNWidgets(2));
   });
 
-  testWidgets('잠금 선택지는 비활성화되어 있다', (tester) async {
+  testWidgets('대대/3구 선택 가능', (tester) async {
     await tester.pumpWidget(const BilliardCoachApp());
 
-    final chips = tester.widgetList<ChoiceChip>(find.byType(ChoiceChip)).toList();
+    // 기본 선택: 중대 + 4구
+    var chips = tester.widgetList<ChoiceChip>(find.byType(ChoiceChip)).toList();
     expect(chips.length, 4);
-    // 중대/4구는 선택됨, 대대/3구는 onSelected == null (잠금)
-    final lockedCount = chips.where((c) => c.onSelected == null).length;
-    expect(lockedCount, 2);
-    final selectedCount = chips.where((c) => c.selected).length;
-    expect(selectedCount, 2);
+    expect(chips.where((c) => c.selected).length, 2);
+
+    // 대대·3구 탭하면 선택이 바뀐다
+    await tester.tap(find.text('대대'));
+    await tester.tap(find.text('3구'));
+    await tester.pump();
+    chips = tester.widgetList<ChoiceChip>(find.byType(ChoiceChip)).toList();
+    final selected = <String>[];
+    for (final c in chips) {
+      if (c.selected) {
+        final center = (c.label as Center).child as Text;
+        selected.add(center.data ?? '');
+      }
+    }
+    expect(selected, containsAll(['대대', '3구']));
   });
 
   testWidgets('서버 주소 설정 다이얼로그 열기', (tester) async {

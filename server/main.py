@@ -52,13 +52,16 @@ class BallIn(BaseModel):
 class GuidesRequest(BaseModel):
     balls: list[BallIn]
     cue: str = "white"
+    game: str = "four"      # 'four' | 'three'
+    table: str = "medium"   # 'medium'(중대) | 'large'(대대)
 
 
 @app.post("/guides")
 def guides(req: GuidesRequest):
-    """검출된 공 배치에서 4구 샷 가이드 목록 계산."""
+    """검출된 공 배치에서 샷 가이드 목록 계산 (4구/3구, 중대/대대)."""
     try:
-        result = compute_guides([b.model_dump() for b in req.balls], req.cue)
+        result = compute_guides([b.model_dump() for b in req.balls], req.cue,
+                                game=req.game, table=req.table)
     except ValueError as e:
         return {"ok": False, "reason": str(e)}
     return {"ok": True, "guides": [guide_to_dict(g) for g in result]}
@@ -127,8 +130,14 @@ if SAVE_UPLOADS:
 
 
 @app.post("/topview")
-async def topview(file: UploadFile = File(...), debug: bool = False):
-    """고해상도 촬영본 → 탑뷰 변환. PNG를 base64로 반환."""
+async def topview(file: UploadFile = File(...), debug: bool = False,
+                  table: str = "medium"):
+    """고해상도 촬영본 → 탑뷰 변환. PNG를 base64로 반환.
+
+    table='large'(대대)면 공 좌표를 대대 mm 스케일로 환산해 반환.
+    (중대/대대는 비율·다이아몬드 분할이 같아 인식 자체는 공용이고,
+    검출 좌표는 중대 기준 정규화 값이므로 배율만 곱하면 실측이 된다.)
+    """
     bgr = _decode(await file.read())
     if bgr is None:
         return {"ok": False, "reason": "이미지 해석 실패"}
@@ -153,6 +162,9 @@ async def topview(file: UploadFile = File(...), debug: bool = False):
 
     img = draw_debug(result) if debug else result.topview
     _, png = cv2.imencode(".png", img)
+    # 대대: 검출 좌표(중대 기준 정규화)를 실측 스케일로 환산
+    from shots.guide import TABLES
+    scale = TABLES.get(table, TABLES["medium"]).w / TABLES["medium"].w
     return {
         "ok": True,
         "diamond_count": len(result.diamonds),
@@ -160,11 +172,12 @@ async def topview(file: UploadFile = File(...), debug: bool = False):
         "refined": result.refined,
         "cloth_color": result.cloth_color,
         "partial": result.partial,
+        "table": table,
         "balls": [
             {
                 "color": b.color,
-                "x_mm": round(b.pos_mm[0], 1),
-                "y_mm": round(b.pos_mm[1], 1),
+                "x_mm": round(b.pos_mm[0] * scale, 1),
+                "y_mm": round(b.pos_mm[1] * scale, 1),
                 "score": round(b.score, 2),
             }
             for b in result.balls

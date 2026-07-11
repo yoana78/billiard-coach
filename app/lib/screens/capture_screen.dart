@@ -17,7 +17,10 @@ Uint8List _convertFrame(YuvFrame f) => yuvFrameToJpeg(f);
 /// 프리뷰 프레임을 주기적으로 서버 /analyze 에 보내 상태를 오버레이로 표시,
 /// 조건 충족이 3회 연속 유지되면 자동 촬영 → /topview → 결과 화면.
 class CaptureScreen extends StatefulWidget {
-  const CaptureScreen({super.key});
+  final String table; // 'medium' | 'large'
+  final String game;  // 'four' | 'three'
+
+  const CaptureScreen({super.key, this.table = 'medium', this.game = 'four'});
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
@@ -125,12 +128,16 @@ class _CaptureScreenState extends State<CaptureScreen> {
   Future<void> _processBytes(Uint8List bytes) async {
     if (_api == null) return;
     try {
-      final result = await _api!.topview(bytes);
+      final result = await _api!.topview(bytes, table: widget.table);
       if (!mounted) return;
       if (result.ok && result.imagePng != null) {
         await Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => ResultScreen(result: result)),
+          MaterialPageRoute(
+              builder: (_) => ResultScreen(
+                  result: result,
+                  table: widget.table,
+                  game: widget.game)),
         );
         return;
       }

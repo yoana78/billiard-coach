@@ -48,7 +48,8 @@ def test_reflect_path_mirror():
     """거울 반사 폴리라인: 반사점이 벽 위에 있고 입사각=반사각."""
     start = np.array([500.0, 500.0])
     target = np.array([2000.0, 500.0])
-    pts = _reflect_path(start, target, ["top"])
+    from shots.guide import TABLES
+    pts = _reflect_path(TABLES["medium"], start, target, ["top"])
     assert pts is not None and len(pts) == 3
     b = pts[1]
     assert b[1] == pytest.approx(Y0, abs=1e-6)  # 반사점은 위쪽 벽 위
