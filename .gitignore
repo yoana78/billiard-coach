@@ -1,0 +1,18 @@
+# Python
+server/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 업로드/테스트 이미지 (개인정보 포함 가능 — 절대 커밋 금지)
+server/testdata/
+
+# Flutter/Android
+app/build/
+app/.dart_tool/
+app/.gradle/
+app/android/.gradle/
+app/android/local.properties
+app/*.iml
+app/.flutter-plugins*
+app/.metadata

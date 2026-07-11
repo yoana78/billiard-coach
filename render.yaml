@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: billiard-coach
+    runtime: docker
+    rootDir: server
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHONIOENCODING
+        value: utf-8

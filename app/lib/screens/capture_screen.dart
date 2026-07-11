@@ -1,0 +1,316 @@
+import 'dart:async';
+
+import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+
+import '../config.dart';
+import '../services/api.dart';
+import '../utils/yuv.dart';
+import 'result_screen.dart';
+
+/// isolate 에서 실행할 변환 함수 (compute 용 최상위 진입점).
+Uint8List _convertFrame(YuvFrame f) => yuvFrameToJpeg(f);
+
+/// [촬영] — 실시간 검출 + 피드백 (기획서 3.2 B안).
+/// 프리뷰 프레임을 주기적으로 서버 /analyze 에 보내 상태를 오버레이로 표시,
+/// 조건 충족이 3회 연속 유지되면 자동 촬영 → /topview → 결과 화면.
+class CaptureScreen extends StatefulWidget {
+  const CaptureScreen({super.key});
+
+  @override
+  State<CaptureScreen> createState() => _CaptureScreenState();
+}
+
+class _CaptureScreenState extends State<CaptureScreen> {
+  CameraController? _camera;
+  ApiClient? _api;
+  String _initError = '';
+
+  bool _analyzing = false; // /analyze 요청 진행 중
+  bool _capturing = false; // 촬영/업로드 진행 중
+  DateTime _lastSent = DateTime.fromMillisecondsSinceEpoch(0);
+  static const _minInterval = Duration(milliseconds: 700);
+  static const _stableCountForAuto = 3;
+
+  AnalyzeResult? _last;
+  int _readyStreak = 0;
+  bool _serverReachable = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    try {
+      final url = await AppConfig.serverUrl();
+      _api = ApiClient(url);
+      final cams = await availableCameras();
+      final back = cams.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cams.first,
+      );
+      final cam = CameraController(
+        back,
+        ResolutionPreset.high,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.yuv420,
+      );
+      await cam.initialize();
+      await cam.startImageStream(_onFrame);
+      if (!mounted) {
+        await cam.dispose();
+        return;
+      }
+      setState(() => _camera = cam);
+    } catch (e) {
+      if (mounted) setState(() => _initError = '카메라 초기화 실패: $e');
+    }
+  }
+
+  Future<void> _onFrame(CameraImage image) async {
+    if (_analyzing || _capturing || _api == null) return;
+    if (DateTime.now().difference(_lastSent) < _minInterval) return;
+    _analyzing = true;
+    _lastSent = DateTime.now();
+    try {
+      final frame = YuvFrame(
+        width: image.width,
+        height: image.height,
+        y: image.planes[0].bytes,
+        u: image.planes[1].bytes,
+        v: image.planes[2].bytes,
+        yRowStride: image.planes[0].bytesPerRow,
+        uvRowStride: image.planes[1].bytesPerRow,
+        uvPixelStride: image.planes[1].bytesPerPixel ?? 1,
+      );
+      final jpeg = await compute(_convertFrame, frame);
+      final result = await _api!.analyzeFrame(jpeg);
+      if (!mounted || _capturing) return;
+      setState(() {
+        _serverReachable = true;
+        _last = result;
+        _readyStreak = result.ready ? _readyStreak + 1 : 0;
+      });
+      if (_readyStreak >= _stableCountForAuto) {
+        unawaited(_capture());
+      }
+    } catch (_) {
+      if (mounted) setState(() => _serverReachable = false);
+    } finally {
+      _analyzing = false;
+    }
+  }
+
+  Future<void> _stopStream() async {
+    final cam = _camera;
+    if (cam != null && cam.value.isStreamingImages) {
+      await cam.stopImageStream();
+    }
+  }
+
+  Future<void> _resumeStream() async {
+    final cam = _camera;
+    if (cam != null && !cam.value.isStreamingImages) {
+      try {
+        await cam.startImageStream(_onFrame);
+      } catch (_) {}
+    }
+  }
+
+  /// 이미지 바이트를 서버로 보내 탑뷰 변환 → 결과 화면. 실패 시 프리뷰 재개.
+  Future<void> _processBytes(Uint8List bytes) async {
+    if (_api == null) return;
+    try {
+      final result = await _api!.topview(bytes);
+      if (!mounted) return;
+      if (result.ok && result.imagePng != null) {
+        await Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => ResultScreen(result: result)),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('변환 실패: ${result.reason} — 다시 시도해주세요')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('업로드 오류: $e')),
+      );
+    }
+    await _resumeStream();
+    if (mounted) setState(() => _capturing = false);
+  }
+
+  Future<void> _capture() async {
+    final cam = _camera;
+    if (cam == null || _capturing || _api == null) return;
+    setState(() {
+      _capturing = true;
+      _readyStreak = 0;
+    });
+    try {
+      await _stopStream();
+      final shot = await cam.takePicture();
+      final bytes = await shot.readAsBytes();
+      await _processBytes(bytes);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('촬영 오류: $e')),
+      );
+      await _resumeStream();
+      setState(() => _capturing = false);
+    }
+  }
+
+  /// 갤러리에서 저장된 사진을 불러와 변환 (테스트/실사진 검증용).
+  Future<void> _pickFromGallery() async {
+    if (_capturing || _api == null) return;
+    setState(() {
+      _capturing = true;
+      _readyStreak = 0;
+    });
+    await _stopStream();
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (picked == null) {
+      // 선택 취소 → 프리뷰 재개
+      await _resumeStream();
+      if (mounted) setState(() => _capturing = false);
+      return;
+    }
+    final bytes = await picked.readAsBytes();
+    await _processBytes(bytes);
+  }
+
+  @override
+  void dispose() {
+    _camera?.dispose();
+    super.dispose();
+  }
+
+  Color get _guideColor {
+    if (_last == null || !_serverReachable) return Colors.red;
+    if (_last!.ready) return Colors.greenAccent;
+    if (_last!.tableFound) return Colors.orangeAccent;
+    return Colors.red;
+  }
+
+  String get _statusMessage {
+    if (!_serverReachable) return '서버에 연결할 수 없어요 (설정에서 주소 확인)';
+    if (_last == null) return '당구대를 화면에 맞춰주세요';
+    return _last!.message;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_initError.isNotEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('촬영')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(_initError, textAlign: TextAlign.center),
+          ),
+        ),
+      );
+    }
+    final cam = _camera;
+    if (cam == null || !cam.value.isInitialized) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    final ready = _last?.ready == true;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Center(child: CameraPreview(cam)),
+          // 가이드 오버레이 (테두리 색으로 상태 표시)
+          IgnorePointer(
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border.all(color: _guideColor, width: 4),
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+          // 상단 안내 문구
+          SafeArea(
+            child: Column(
+              children: [
+                Container(
+                  margin: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Text(
+                    _statusMessage,
+                    style: TextStyle(color: _guideColor, fontSize: 16),
+                  ),
+                ),
+                if (_last != null && _last!.tableFound)
+                  Text(
+                    '다이아몬드  장쿠션 ${_last!.diamondLong}/14 · 단쿠션 ${_last!.diamondShort}/6',
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+              ],
+            ),
+          ),
+          // 하단 촬영/갤러리 버튼
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 40),
+              child: _capturing
+                  ? const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(color: Colors.amber),
+                        SizedBox(height: 12),
+                        Text('탑뷰 변환 중...', style: TextStyle(color: Colors.white)),
+                      ],
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // 갤러리에서 불러오기 (저장된 사진으로 테스트)
+                        IconButton.filledTonal(
+                          onPressed: _pickFromGallery,
+                          tooltip: '저장된 사진 불러오기',
+                          iconSize: 28,
+                          icon: const Icon(Icons.photo_library),
+                        ),
+                        const SizedBox(width: 32),
+                        GestureDetector(
+                          // 디버그용: 길게 누르면 조건 미충족이어도 강제 촬영
+                          onLongPress: _capture,
+                          child: FloatingActionButton.large(
+                            backgroundColor:
+                                ready ? Colors.greenAccent : Colors.white24,
+                            onPressed: ready ? _capture : null,
+                            child: Icon(
+                              Icons.camera_alt,
+                              color: ready ? Colors.black : Colors.white54,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 32),
+                        const SizedBox(width: 48), // 좌우 균형 맞춤
+                      ],
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
