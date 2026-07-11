@@ -1,11 +1,10 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 서버 주소 설정. 기본값은 Cloudflare 터널 공개 주소 (외부에서 접속 가능).
-/// 터널이 재시작되면 주소가 바뀌므로, 그때는 인트로 톱니바퀴에서 변경.
-/// 같은 Wi-Fi 개발 시에는 PC LAN IP (예: http://192.168.219.102:8000).
+/// 서버 주소 설정. 기본값은 Render 클라우드 고정 주소 (PC 안 켜도 동작).
+/// 로컬 개발 시에는 인트로 톱니바퀴에서 PC LAN IP로 변경
+/// (예: http://192.168.219.102:8000).
 class AppConfig {
-  static const String defaultServerUrl =
-      'https://frog-compete-enough-golf.trycloudflare.com';
+  static const String defaultServerUrl = 'https://billiard-coach.onrender.com';
   static const String _key = 'server_url';
 
   static Future<String> serverUrl() async {
