@@ -17,6 +17,12 @@ from .cushion_lines import CushionLine, intersect, angle_between, support_extent
 from .diamond_detector import _find_bright_blob
 from .homography import mm_to_px, canvas_size, PX_PER_MM
 
+
+def _unit(v):
+    v = np.asarray(v, dtype=float)
+    n = float(np.linalg.norm(v))
+    return v / n if n > 1e-9 else v
+
 # 부분 촬영 판단: 천 컨투어가 이미지 가장자리에 이만큼 닿아 있으면 부분
 BORDER_TOUCH_MARGIN = 6
 
@@ -262,4 +268,116 @@ def solve_partial_from_lines(gray: np.ndarray, mask: np.ndarray,
     return LineSolveResult(
         corners=corners.astype(np.float32),
         partial=True, visible_lines=3, score=score0,
+    ), Hm
+
+
+# 코너(귀퉁이)만 보이는 경우 최소 매칭 게이트 — 이보다 낮으면 채택 안 함
+CORNER_MIN_MATCH = 6
+
+# 코너의 4가지 테이블 위치 × 인접 코너 축 배정 (cloth-boundary mm)
+def _corner_targets():
+    """(코너 mm, 축A가 장쿠션 방향인지, 인접코너B mm, 인접코너D mm) 목록.
+
+    코너 c0 → 테이블 4모서리 중 하나, la 방향 → 한 축, lb 방향 → 다른 축.
+    대각 코너 fC = B + D - A (테이블 평면에서는 직사각형).
+    """
+    ov = spec.CUSHION_OVERHANG_MM
+    x0, y0 = -ov, -ov
+    x1, y1 = spec.TABLE_W_MM + ov, spec.TABLE_H_MM + ov
+    A_list = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    out = []
+    for A in A_list:
+        ax, ay = A
+        bx = x1 if ax == x0 else x0   # 반대편 x
+        by = y1 if ay == y0 else y0   # 반대편 y
+        # 축A=장쿠션(x축 따라 la), 축A=단쿠션(y축 따라 la) 두 배정
+        out.append((A, True, (bx, ay), (ax, by)))   # la→x, lb→y
+        out.append((A, False, (ax, by), (bx, ay)))  # la→y, lb→x
+    return out
+
+
+def solve_corner_from_lines(gray: np.ndarray, mask: np.ndarray,
+                            lines: list[CushionLine]) -> tuple | None:
+    """2개(직교) 쿠션 라인만 보이는 코너 촬영 → 다이아몬드 격자 정합으로 역산.
+
+    보이는 코너 c0 + 두 라인 방향을 고정하고, 두 인접 코너를 각 라인 위에서,
+    대각 코너를 그 근방에서 탐색하며 다이아몬드 정합 점수 최댓값을 찾는다.
+    정합이 약하면(CORNER_MIN_MATCH 미만) None → 재촬영 안내로 폴백.
+    """
+    if len(lines) < 2:
+        return None
+    # 두 라인이 화면상 충분히 직교해야 코너 (평행/얕은 각은 제외)
+    best_pair = None
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            ang = angle_between(lines[i], lines[j])
+            if 55.0 <= ang <= 125.0:
+                if best_pair is None or abs(ang - 90) < best_pair[0]:
+                    best_pair = (abs(ang - 90), lines[i], lines[j])
+    if best_pair is None:
+        return None
+    _da, la, lb = best_pair
+
+    c0 = intersect(la, lb)
+    if c0 is None:
+        return None
+    h_img, w_img = mask.shape
+    if not (0 <= c0[0] < w_img and 0 <= c0[1] < h_img):
+        return None
+
+    ext_a = support_extent(la, mask)
+    ext_b = support_extent(lb, mask)
+    if ext_a is None or ext_b is None:
+        return None
+    e_a = max(ext_a, key=lambda p: np.linalg.norm(p - c0))
+    e_b = max(ext_b, key=lambda p: np.linalg.norm(p - c0))
+    dir_a = _unit(e_a - c0)
+    dir_b = _unit(e_b - c0)
+    diag = float(np.hypot(h_img, w_img))
+    vis_a = float(np.linalg.norm(e_a - c0))
+    vis_b = float(np.linalg.norm(e_b - c0))
+
+    # 인접 코너는 '보이는 끝'보다 더 멀리 있다 (foreshortening). 로그 간격 탐색.
+    LA = [vis_a * f for f in np.geomspace(1.05, 4.0, 7)]
+    LB = [vis_b * f for f in np.geomspace(1.05, 4.0, 7)]
+
+    best = None  # (score, matched, Hm)
+    for A, _axis, B, Dc in _corner_targets():
+        dst_base = np.array([A, B, (B[0] + Dc[0] - A[0], B[1] + Dc[1] - A[1]), Dc],
+                            dtype=np.float32)
+        dst = np.array([mm_to_px(tuple(p)) for p in dst_base], dtype=np.float32)
+        for la_len in LA:
+            fB = c0 + dir_a * la_len
+            for lb_len in LB:
+                fD = c0 + dir_b * lb_len
+                # 대각 코너 근방(이미지 평행사변형 완성점) 소폭 탐색
+                base_C = fB + fD - c0
+                for ox in (-0.12, 0.0, 0.12):
+                    for oy in (-0.12, 0.0, 0.12):
+                        fC = base_C + dir_a * (la_len * ox) + dir_b * (lb_len * oy)
+                        src = np.array([c0, fB, fC, fD], dtype=np.float32)
+                        try:
+                            Hm = cv2.getPerspectiveTransform(src, dst)
+                        except cv2.error:
+                            continue
+                        score, matched = _diamond_score(gray, Hm, scale=0.35)
+                        if matched < CORNER_MIN_MATCH:
+                            continue
+                        if best is None or score > best[0]:
+                            best = (score, matched, Hm)
+
+    if best is None:
+        return None
+    score0, _m, Hm = best
+    # 코너 4점을 표준 순서로 되돌려 저장 (디버그용)
+    ov = spec.CUSHION_OVERHANG_MM
+    canvas4 = np.array([
+        mm_to_px((-ov, -ov)), mm_to_px((spec.TABLE_W_MM + ov, -ov)),
+        mm_to_px((spec.TABLE_W_MM + ov, spec.TABLE_H_MM + ov)),
+        mm_to_px((-ov, spec.TABLE_H_MM + ov)),
+    ], dtype=np.float32).reshape(-1, 1, 2)
+    corners_img = cv2.perspectiveTransform(canvas4, np.linalg.inv(Hm)).reshape(-1, 2)
+    return LineSolveResult(
+        corners=corners_img.astype(np.float32),
+        partial=True, visible_lines=2, score=score0,
     ), Hm

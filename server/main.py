@@ -109,8 +109,12 @@ async def analyze(file: UploadFile = File(...)):
         # 부분 촬영 모드: 정밀 역산은 촬영 후 수행 (실시간은 라인 수로만 판단)
         ready = True
         message = "일부 촬영 모드 — 이대로 촬영 가능해요"
+    elif n_lines == 2:
+        # 코너 촬영 모드: 직교 쿠션 2개면 격자 역산 시도 가능
+        ready = True
+        message = "귀퉁이 촬영 모드 — 이대로 촬영 가능해요"
     else:
-        message = "쿠션 양쪽이 다 보이게 조금 더 뒤로 가주세요"
+        message = "쿠션이 더 보이게 조금 더 뒤로 가주세요"
 
     return {
         "ok": True, "ready": ready, "table_found": True,

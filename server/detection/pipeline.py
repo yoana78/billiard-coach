@@ -17,7 +17,8 @@ from . import spec
 from .table_detector import detect_table, cloth_mask, TableQuad
 from .cushion_lines import detect_cushion_lines
 from .partial import (
-    solve_full_from_lines, solve_partial_from_lines, cloth_touches_border,
+    solve_full_from_lines, solve_partial_from_lines,
+    solve_corner_from_lines, cloth_touches_border,
 )
 from .diamond_detector import detect_diamonds, DiamondHit
 from .ball_detector import detect_balls, draw_balls, Ball
@@ -111,6 +112,15 @@ def image_to_topview(bgr: np.ndarray) -> TopViewResult:
             if len(hits) >= 4 and (best is None or len(hits) > best[0]):
                 best = (len(hits), Hc, hits, True)
 
+    # 2.5) 코너 촬영 후보: 직교 쿠션 2개만 보일 때 다이아몬드 격자로 역산
+    if n_lines >= 2 and (best is None or best[0] < 6):
+        cr = solve_corner_from_lines(gray, mask, lines)
+        if cr is not None:
+            _res, Hc = cr
+            hits = diamonds_of(Hc)
+            if len(hits) >= 6 and (best is None or len(hits) > best[0]):
+                best = (len(hits), Hc, hits, True)
+
     # 3) legacy 컨투어 방식 (프레임에 안 잘린 전체 촬영 한정)
     if best is None and not touches:
         quad = detect_table(bgr)
@@ -121,11 +131,12 @@ def image_to_topview(bgr: np.ndarray) -> TopViewResult:
                 best = (len(hits), Hc, hits, False)
 
     if best is None:
-        if n_lines <= 2:
-            reason = ("당구대 쿠션이 충분히 안 보여요 — "
-                      "긴 쿠션 양쪽이 다 보이게 조금 더 뒤에서 찍어주세요")
+        if n_lines <= 1:
+            reason = ("당구대 쿠션이 거의 안 보여요 — "
+                      "쿠션이 더 보이게 조금 더 뒤에서 찍어주세요")
         else:
-            reason = "당구대 형태를 인식하지 못했어요 — 각도를 바꿔 다시 찍어주세요"
+            reason = ("당구대 다이아몬드가 잘 안 보여요 — "
+                      "빛반사가 적은 각도에서 다시 찍어주세요")
         return TopViewResult(ok=False, reason=reason, visible_lines=n_lines)
 
     _n, H0, hits, partial_flag = best

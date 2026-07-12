@@ -154,6 +154,24 @@ class _CaptureScreenState extends State<CaptureScreen> {
     if (mounted) setState(() => _capturing = false);
   }
 
+  /// 촬영 직전 카메라 노출을 어둡게 낮춘다 (빛반사 저감 → 다이아몬드 검출↑).
+  /// 당구장 조명은 레일에 강한 반사를 만들어 흰 다이아몬드 점을 하얗게
+  /// 날려버리는데, 노출을 내리면 레일이 어두워지고 점 대비가 살아난다.
+  Future<double> _applyLowExposure(CameraController cam) async {
+    try {
+      final minEv = await cam.getMinExposureOffset();
+      if (minEv >= 0) return 0;
+      // 최소 노출의 60% 지점 (완전 최소는 색 인식이 불리 → 절충)
+      final target = (minEv * 0.6).clamp(minEv, 0.0);
+      final applied = await cam.setExposureOffset(target);
+      // 노출 반영에 약간의 시간 필요
+      await Future.delayed(const Duration(milliseconds: 250));
+      return applied;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<void> _capture() async {
     final cam = _camera;
     if (cam == null || _capturing || _api == null) return;
@@ -163,7 +181,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
     });
     try {
       await _stopStream();
+      await _applyLowExposure(cam);
       final shot = await cam.takePicture();
+      // 노출 원복 (프리뷰 재개 시 정상 밝기)
+      try {
+        await cam.setExposureOffset(0);
+      } catch (_) {}
       final bytes = await shot.readAsBytes();
       await _processBytes(bytes);
     } catch (e) {
@@ -171,6 +194,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('촬영 오류: $e')),
       );
+      try {
+        await cam.setExposureOffset(0);
+      } catch (_) {}
       await _resumeStream();
       setState(() => _capturing = false);
     }

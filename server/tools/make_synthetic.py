@@ -125,6 +125,19 @@ def make_partial_photo(seed: int = 0, tilt: float = 0.2,
     return photo[:, :x1].copy(), H, balls
 
 
+def make_corner_photo(seed: int = 0, tilt: float = 0.18,
+                      keep: float = 0.55) -> tuple[np.ndarray, np.ndarray, list]:
+    """좌상단 귀퉁이만 프레임에 담긴 합성 사진 (직교 쿠션 2개만 보임).
+
+    좌·상 절반씩 남기고 잘라 코너 근처만 담는다. 정답 H는 그대로 유효.
+    """
+    photo, H, balls = make_photo(seed=seed, out_size=(2400, 1400), tilt=tilt)
+    h, w = photo.shape[:2]
+    x1 = int(w * keep)
+    y1 = int(h * keep)
+    return photo[:y1, :x1].copy(), H, balls
+
+
 if __name__ == "__main__":
     out_dir = Path(__file__).resolve().parents[1] / "testdata"
     out_dir.mkdir(exist_ok=True)
