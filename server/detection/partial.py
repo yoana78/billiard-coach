@@ -23,6 +23,20 @@ def _unit(v):
     n = float(np.linalg.norm(v))
     return v / n if n > 1e-9 else v
 
+
+def _orientation_ok(H: np.ndarray, pt) -> bool:
+    """H(이미지→캔버스)가 방향을 보존하는가 (거울상 아님).
+
+    실제 카메라가 평면을 찍은 호모그래피는 방향을 보존한다. 다이아몬드가
+    좌우대칭이라 정합 점수는 거울상 해도 똑같이 높게 나오므로, 물리적으로
+    불가능한 거울상(좌우반전) 해를 여기서 배제한다.
+    호모그래피 야코비안 행렬식의 부호 = sign(det(H)) * sign(w). 정상 규약
+    (모서리 tl,tr,br,bl → 캔버스 동일 순서)에서는 이 값이 양수다.
+    """
+    detH = float(np.linalg.det(H))
+    w = float(H[2, 0] * pt[0] + H[2, 1] * pt[1] + H[2, 2])
+    return detH * w > 0
+
 # 부분 촬영 판단: 천 컨투어가 이미지 가장자리에 이만큼 닿아 있으면 부분
 BORDER_TOUCH_MARGIN = 6
 
@@ -204,6 +218,8 @@ def _search_decomposition(gray, mask, la, lb, lc):
                     Hm = _homography_to_canvas(corners, cross_is_short, flip)
                     if Hm is None:
                         continue
+                    if not _orientation_ok(Hm, c1):
+                        continue  # 거울상 해 배제
                     score, matched = _diamond_score(gray, Hm, scale=0.5)
                     if matched < 4:
                         continue
@@ -359,6 +375,9 @@ def solve_corner_from_lines(gray: np.ndarray, mask: np.ndarray,
                         try:
                             Hm = cv2.getPerspectiveTransform(src, dst)
                         except cv2.error:
+                            continue
+                        # 거울상(좌우반전) 해 배제 — 실제 카메라 불가능
+                        if not _orientation_ok(Hm, c0):
                             continue
                         score, matched = _diamond_score(gray, Hm, scale=0.35)
                         if matched < CORNER_MIN_MATCH:

@@ -35,11 +35,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
   bool _capturing = false; // 촬영/업로드 진행 중
   DateTime _lastSent = DateTime.fromMillisecondsSinceEpoch(0);
   static const _minInterval = Duration(milliseconds: 700);
-  static const _stableCountForAuto = 3;
 
   AnalyzeResult? _last;
-  int _readyStreak = 0;
   bool _serverReachable = true;
+  bool _autoCapture = false; // 기본은 수동 촬영 (원하는 각도에서 직접)
+  static const _stableCountForAuto = 3;
+  int _readyStreak = 0;
 
   @override
   void initState() {
@@ -98,7 +99,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
         _last = result;
         _readyStreak = result.ready ? _readyStreak + 1 : 0;
       });
-      if (_readyStreak >= _stableCountForAuto) {
+      // 자동촬영은 옵션일 때만 (기본 off — 사용자가 각도를 직접 잡도록)
+      if (_autoCapture && _readyStreak >= _stableCountForAuto) {
         unawaited(_capture());
       }
     } catch (_) {
@@ -292,7 +294,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
                 ),
                 if (_last != null && _last!.tableFound)
                   Text(
-                    '다이아몬드  장쿠션 ${_last!.diamondLong}/14 · 단쿠션 ${_last!.diamondShort}/6',
+                    '다이아몬드  장쿠션 ${_last!.diamondLong}/18 · 단쿠션 ${_last!.diamondShort}/10',
                     style: const TextStyle(color: Colors.white70, fontSize: 13),
                   ),
               ],
@@ -323,21 +325,27 @@ class _CaptureScreenState extends State<CaptureScreen> {
                           icon: const Icon(Icons.photo_library),
                         ),
                         const SizedBox(width: 32),
-                        GestureDetector(
-                          // 디버그용: 길게 누르면 조건 미충족이어도 강제 촬영
-                          onLongPress: _capture,
-                          child: FloatingActionButton.large(
-                            backgroundColor:
-                                ready ? Colors.greenAccent : Colors.white24,
-                            onPressed: ready ? _capture : null,
-                            child: Icon(
-                              Icons.camera_alt,
-                              color: ready ? Colors.black : Colors.white54,
-                            ),
-                          ),
+                        // 셔터: 항상 누를 수 있음 (원하는 각도에서 직접 촬영).
+                        // 초록이면 인식 조건 충족(권장), 아니어도 촬영 가능.
+                        FloatingActionButton.large(
+                          backgroundColor:
+                              ready ? Colors.greenAccent : Colors.white,
+                          onPressed: _capture,
+                          child: const Icon(Icons.camera_alt,
+                              color: Colors.black),
                         ),
                         const SizedBox(width: 32),
-                        const SizedBox(width: 48), // 좌우 균형 맞춤
+                        // 자동촬영 토글
+                        IconButton.filledTonal(
+                          onPressed: () =>
+                              setState(() => _autoCapture = !_autoCapture),
+                          tooltip: _autoCapture ? '자동촬영 켜짐' : '자동촬영 꺼짐',
+                          iconSize: 28,
+                          isSelected: _autoCapture,
+                          icon: Icon(_autoCapture
+                              ? Icons.motion_photos_on
+                              : Icons.motion_photos_off),
+                        ),
                       ],
                     ),
             ),
